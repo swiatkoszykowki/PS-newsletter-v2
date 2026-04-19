@@ -8,19 +8,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ===================== KONFIGURACJA =====================
+# ===================== KONFIGURACJA + DEBUG =====================
 BALLDONTLIE_KEY = os.getenv("BALLDONTLIE_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY")
 FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 RECIPIENTS = [r.strip() for r in os.getenv("RECIPIENTS", "").split(",") if r.strip()]
 
-# NOWOŚCI
-SENDGRID_TEMPLATE_ID = os.getenv("SENDGRID_TEMPLATE_ID")  # opcjonalne
-BRAND_LOGO_URL = os.getenv("BRAND_LOGO_URL", "https://via.placeholder.com/600x120/111827/ffffff?text=TWOJE+LOGO")  # ← zmień na swoje!
+SENDGRID_TEMPLATE_ID = os.getenv("SENDGRID_TEMPLATE_ID")
+BRAND_LOGO_URL = os.getenv("BRAND_LOGO_URL", "https://via.placeholder.com/600x120/111827/ffffff?text=TWOJE+LOGO")
 
 BASE_URL = "https://api.balldontlie.io"
 HEADERS = {"Authorization": BALLDONTLIE_KEY}
+
+print("🔍 === DEBUG START ===")
+print(f"🔑 BALLDONTLIE_KEY wczytany: {'TAK' if BALLDONTLIE_KEY else 'NIE'}")
+if BALLDONTLIE_KEY:
+    masked = BALLDONTLIE_KEY[:4] + "..." + BALLDONTLIE_KEY[-4:]
+    print(f"🔑 Klucz (zamaskowany): {masked} | Długość: {len(BALLDONTLIE_KEY)}")
+else:
+    print("❌ Klucz jest pusty! Sprawdź secrets na GitHub.")
+print(f"📅 Dzisiaj: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+print("🔍 === DEBUG END ===\n")
+
 # =======================================================
 
 def get_yesterday():
@@ -29,26 +39,45 @@ def get_yesterday():
 def get_today():
     return datetime.now().strftime("%Y-%m-%d")
 
-# ==================== TYLKO DARMOWE DANE ====================
+# ==================== DARMOWE DANE + DEBUG ====================
 def fetch_yesterday_games():
     date = get_yesterday()
+    print(f"🔍 DEBUG: Pobieram mecze z wczoraj → data: {date}")
+    print(f"🔍 DEBUG: Wysyłam nagłówek Authorization: {'bdl_...' if BALLDONTLIE_KEY else 'BRAK'}")
+    
     response = requests.get(
         f"{BASE_URL}/nba/v1/games",
         headers=HEADERS,
         params={"dates[]": date}
     )
+    
+    print(f"🔍 DEBUG: Status odpowiedzi: {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ DEBUG: Treść błędu: {response.text[:500]}")  # pierwsze 500 znaków
+    
     response.raise_for_status()
-    return response.json()["data"]
+    data = response.json()["data"]
+    print(f"✅ DEBUG: Pobrano {len(data)} meczów z wczoraj")
+    return data
 
 def fetch_today_games():
     date = get_today()
+    print(f"🔍 DEBUG: Pobieram mecze na dziś → data: {date}")
+    
     response = requests.get(
         f"{BASE_URL}/nba/v1/games",
         headers=HEADERS,
         params={"dates[]": date}
     )
+    
+    print(f"🔍 DEBUG: Status odpowiedzi (dzisiaj): {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ DEBUG: Treść błędu (dzisiaj): {response.text[:500]}")
+    
     response.raise_for_status()
-    return response.json()["data"]
+    data = response.json()["data"]
+    print(f"✅ DEBUG: Pobrano {len(data)} meczów na dziś")
+    return data
 
 # ==================== GENEROWANIE NEWSLETTERA ====================
 def generate_newsletter(games_yest, games_today):
@@ -75,64 +104,4 @@ Mecze na dziś:
 
 Zasady (bardzo ważne):
 - Całość jako gotowy, piękny HTML od <!DOCTYPE html> do </html>
-- Na samej górze wstaw logo marki: <img src="{BRAND_LOGO_URL}" style="max-width:600px; width:100%; height:auto; display:block; margin:0 auto 20px;">
-- Użyj responsywnego designu + dark mode (@media prefers-color-scheme: dark)
-- Dla każdego meczu z wczoraj dodaj:
-  • Link do box score: https://api.balldontlie.io/nba/v1/games/{{id}}
-  • Link do highlights: https://www.youtube.com/results?search_query=NBA+highlights+{{visitor}}+{{home}}+{get_yesterday()}
-  • Miniaturkę highlightu (img src z publicznego YouTube lub ESPN jeśli pasuje)
-- Sekcja "🔥 Najlepsze highlights wczoraj" z 2-3 zdjęciami/linkami
-- Emotikony, krótkie akapity, luźny styl (jak polski podcast NBA)
-- Na początku dokładnie: [TYTUŁ: Tutaj tytuł maila]
-
-Styl: emocjonalny, zabawny, angażujący – zero suchej statystyki, maksimum vibe'u!"""
-
-    chat = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.85,
-        max_tokens=4000
-    )
-    
-    return chat.choices[0].message.content
-
-# ==================== WYSYŁKA ====================
-def send_email(html_content, subject):
-    sg = SendGridAPIClient(SENDGRID_KEY)
-    message = Mail(from_email=FROM_EMAIL, subject=subject)
-
-    if SENDGRID_TEMPLATE_ID:
-        message.template_id = SENDGRID_TEMPLATE_ID
-        message.dynamic_template_data = {"subject": subject, "html_content": html_content}
-    else:
-        message.html_content = html_content
-
-    for email in RECIPIENTS:
-        message.add_to(To(email))
-
-    response = sg.send(message)
-    print(f"✅ Newsletter wysłany! Status: {response.status_code}")
-
-# ==================== MAIN ====================
-def main():
-    print("🚀 Start generowania NBA Newsletter LITE...")
-    
-    games_yest = fetch_yesterday_games()
-    games_today = fetch_today_games()
-    
-    print(f"Znaleziono {len(games_yest)} meczów z wczoraj i {len(games_today)} na dziś.")
-    
-    newsletter_raw = generate_newsletter(games_yest, games_today)
-    
-    if "[TYTUŁ:" in newsletter_raw:
-        title = newsletter_raw.split("[TYTUŁ:")[1].split("]")[0].strip()
-        html = newsletter_raw.split("]", 1)[1].strip()
-    else:
-        title = f"NBA Daily • {get_yesterday()}"
-        html = newsletter_raw
-
-    send_email(html, title)
-    print("🎉 Gotowe! Newsletter leci sam codziennie.")
-
-if __name__ == "__main__":
-    main()
+- Na samej górze
