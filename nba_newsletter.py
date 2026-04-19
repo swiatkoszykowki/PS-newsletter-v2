@@ -83,11 +83,11 @@ def generate_newsletter(games_yest, games_today):
     ]) or "Brak meczów wczoraj."
 
     today_str = "\n".join([
-        f"{g['visitor_team']['abbreviation']} @ {g['home_team']['abbreviation']} ({g['status']})"
+        f"{g['visitor_team']['abbreviation']} @ {g['home_team']['abbreviation']} ({g.get('status', '—')})"
         for g in games_today
     ]) or "Brak meczów dzisiaj."
 
-    prompt = f"""Jesteś najlepszym polskim copywriterem NBA. Napisz **atrakcyjny, memiczny newsletter** po polsku.
+    prompt = f"""Jesteś najlepszym polskim copywriterem NBA. Napisz **bardzo atrakcyjny, memiczny i profesjonalny newsletter** po polsku.
 
 Dane:
 Mecze z wczoraj:
@@ -96,20 +96,24 @@ Mecze z wczoraj:
 Mecze na dziś:
 {today_str}
 
-Zasady:
-- Całość jako gotowy, piękny HTML od <!DOCTYPE html> do </html>
-- Na górze wstaw logo: <img src="{BRAND_LOGO_URL}" style="max-width:600px;width:100%;height:auto;display:block;margin:0 auto 20px;">
-- Responsywny + dark mode
-- Dla każdego meczu linki do box score i highlights
-- Sekcja 🔥 Najlepsze highlights
-- Emotikony, luźny styl
+Zasady (bardzo ważne):
+- Całość jako gotowy, czysty HTML od <!DOCTYPE html> do </html>
+- Na górze wstaw logo: <img src="{BRAND_LOGO_URL}" style="max-width:600px;width:100%;height:auto;display:block;margin:0 auto 20px;" alt="NBA Newsletter">
+- Użyj nowoczesnego, ciemnego designu (dark mode friendly)
+- Tytuł maila ma być chwytliwy, np. "NBA Daily • 18 kwietnia – Lakers roznieśli rywala 🔥"
+- Dla każdego meczu z wczoraj dodaj:
+  • Link do box score: https://www.balldontlie.io/nba/v1/games/{{ID}}
+  • Link do highlights: https://www.youtube.com/results?search_query=NBA+highlights+{{visitor}}+{{home}}+2026-04-18
+- Sekcja "🔥 Najlepsze highlights wczoraj" z 2-3 przykładowymi miniaturkami i linkami
+- Krótko, dynamicznie, z emotkami i humorem
+- Na samym początku dokładnie: [TYTUŁ: Tutaj tytuł maila]
 
-Na początku dokładnie: [TYTUŁ: Tutaj tytuł maila]"""
+Styl: luźny, ale profesjonalny – jak polski podcast NBA o poranku."""
 
     chat = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.85,
+        temperature=0.8,
         max_tokens=4000
     )
     return chat.choices[0].message.content
