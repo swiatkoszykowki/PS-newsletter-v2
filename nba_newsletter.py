@@ -1,163 +1,200 @@
 import os
 import requests
 from datetime import datetime, timedelta
+from functools import lru_cache
+from dotenv import load_dotenv
+from jinja2 import Template
 from groq import Groq
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To
-from dotenv import load_dotenv
 
 load_dotenv()
 
-# ===================== KONFIGURACJA + DEBUG =====================
+# ===================== CONFIG =====================
 BALLDONTLIE_KEY = os.getenv("BALLDONTLIE_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY")
 FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL")
 RECIPIENTS = [r.strip() for r in os.getenv("RECIPIENTS", "").split(",") if r.strip()]
 
-SENDGRID_TEMPLATE_ID = os.getenv("SENDGRID_TEMPLATE_ID")
-BRAND_LOGO_URL = os.getenv("BRAND_LOGO_URL", "https://via.placeholder.com/600x120/111827/ffffff?text=TWOJE+LOGO")
-
 BASE_URL = "https://api.balldontlie.io"
 HEADERS = {"Authorization": BALLDONTLIE_KEY}
 
-print("🔍 === DEBUG START ===")
-print(f"🔑 BALLDONTLIE_KEY: {'TAK' if BALLDONTLIE_KEY else 'NIE'}")
-if BALLDONTLIE_KEY:
-    print(f"   (zamaskowany): {BALLDONTLIE_KEY[:4]}...{BALLDONTLIE_KEY[-4:]} | długość: {len(BALLDONTLIE_KEY)}")
+client = Groq(api_key=GROQ_KEY)
 
-print(f"🔑 SENDGRID_KEY: {'TAK' if SENDGRID_KEY else 'NIE'}")
-if SENDGRID_KEY:
-    print(f"   (zamaskowany): {SENDGRID_KEY[:4]}...{SENDGRID_KEY[-4:]} | długość: {len(SENDGRID_KEY)}")
-else:
-    print("❌ SendGrid klucz pusty!")
-
-print(f"📧 FROM_EMAIL: {FROM_EMAIL or 'BRAK'}")
-print(f"📅 Dzisiaj: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-print("🔍 === DEBUG END ===\n")
-
-# =======================================================
-
+# ===================== HELPERS =====================
 def get_yesterday():
     return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def get_today():
     return datetime.now().strftime("%Y-%m-%d")
 
-# ==================== DANE Z BALLDONTLIE ====================
-def fetch_yesterday_games():
-    date = get_yesterday()
-    print(f"🔍 DEBUG: Pobieram mecze z wczoraj → data: {date}")
-    response = requests.get(
+# ===================== FETCH =====================
+def fetch_games(date):
+    res = requests.get(
         f"{BASE_URL}/nba/v1/games",
         headers=HEADERS,
         params={"dates[]": date}
     )
-    print(f"🔍 DEBUG: Status BallDontLie: {response.status_code}")
-    response.raise_for_status()
-    data = response.json()["data"]
-    print(f"✅ DEBUG: Pobrano {len(data)} meczów z wczoraj")
-    return data
+    res.raise_for_status()
+    return res.json()["data"]
 
-def fetch_today_games():
-    date = get_today()
-    print(f"🔍 DEBUG: Pobieram mecze na dziś → data: {date}")
-    response = requests.get(
-        f"{BASE_URL}/nba/v1/games",
+@lru_cache(maxsize=500)
+def fetch_stats(game_id):
+    res = requests.get(
+        f"{BASE_URL}/nba/v1/stats",
         headers=HEADERS,
-        params={"dates[]": date}
+        params={"game_ids[]": game_id}
     )
-    print(f"🔍 DEBUG: Status BallDontLie (dziś): {response.status_code}")
-    response.raise_for_status()
-    data = response.json()["data"]
-    print(f"✅ DEBUG: Pobrano {len(data)} meczów na dziś")
-    return data
+    res.raise_for_status()
+    return res.json()["data"]
 
-# ==================== GENEROWANIE NEWSLETTERA ====================
-def generate_newsletter(games_yest, games_today):
-    client = Groq(api_key=GROQ_KEY)
-    
-    games_str = "\n".join([
-        f"{g['visitor_team']['abbreviation']} @ {g['home_team']['abbreviation']} → {g.get('visitor_team_score', '?')}-{g.get('home_team_score', '?')} (ID: {g['id']})"
-        for g in games_yest
-    ]) or "Brak meczów wczoraj."
+# ===================== ENRICH =====================
+def enrich_games(games):
+    enriched = []
 
-    today_str = "\n".join([
-        f"{g['visitor_team']['abbreviation']} @ {g['home_team']['abbreviation']} ({g.get('status', '—')})"
-        for g in games_today
-    ]) or "Brak meczów dzisiaj."
+    for g in games:
+        stats = fetch_stats(g["id"])
 
-    prompt = f"""Jesteś najlepszym polskim copywriterem NBA. Napisz **bardzo atrakcyjny, memiczny i profesjonalny newsletter** po polsku.
+        if stats:
+            top = max(stats, key=lambda x: x["pts"])
+            player = f"{top['player']['first_name']} {top['player']['last_name']}"
+            pts = top["pts"]
+        else:
+            player = "Brak danych"
+            pts = "?"
 
-Dane:
-Mecze z wczoraj:
-{games_str}
+        enriched.append({
+            "game": f"{g['visitor_team']['abbreviation']} @ {g['home_team']['abbreviation']}",
+            "score": f"{g.get('visitor_team_score', '?')}-{g.get('home_team_score', '?')}",
+            "player": player,
+            "pts": pts,
+            "id": g["id"],
+            "highlight_url": f"https://www.youtube.com/results?search_query=NBA+highlights+{g['visitor_team']['abbreviation']}+{g['home_team']['abbreviation']}+{get_yesterday()}"
+        })
 
-Mecze na dziś:
-{today_str}
+    return enriched
 
-Zasady (bardzo ważne):
-- Całość jako gotowy, czysty HTML od <!DOCTYPE html> do </html>
-- Na górze wstaw logo: <img src="{BRAND_LOGO_URL}" style="max-width:600px;width:100%;height:auto;display:block;margin:0 auto 20px;" alt="NBA Newsletter">
-- Użyj nowoczesnego, ciemnego designu (dark mode friendly)
-- Tytuł maila ma być chwytliwy, np. "NBA Daily • 18 kwietnia – Lakers roznieśli rywala 🔥"
-- Dla każdego meczu z wczoraj dodaj:
-  • Link do box score: https://www.balldontlie.io/nba/v1/games/{{ID}}
-  • Link do highlights: https://www.youtube.com/results?search_query=NBA+highlights+{{visitor}}+{{home}}+2026-04-18
-- Sekcja "🔥 Najlepsze highlights wczoraj" z 2-3 przykładowymi miniaturkami i linkami
-- Krótko, dynamicznie, z emotkami i humorem
-- Na samym początku dokładnie: [TYTUŁ: Tutaj tytuł maila]
+# ===================== AI =====================
+def generate_recap(game):
+    prompt = f"""
+Game: {game['game']}
+Score: {game['score']}
+Top player: {game['player']} ({game['pts']} pts)
 
-Styl: luźny, ale profesjonalny – jak polski podcast NBA o poranku."""
+Write 2 short sentences NBA recap.
+Style: modern, slightly witty, Polish.
+"""
 
     chat = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
-        max_tokens=4000
+        temperature=0.7,
+        max_tokens=120
     )
-    return chat.choices[0].message.content
 
-# ==================== WYSYŁKA SENDGRID ====================
-def send_email(html_content, subject):
-    print("🔍 DEBUG SendGrid: Tworzę klienta...")
+    return chat.choices[0].message.content.strip()
+
+def generate_subject(games):
+    prompt = f"""
+Create catchy Polish NBA newsletter subject line.
+
+Games:
+{", ".join([g["game"] for g in games])}
+
+Max 10 words. Include emoji.
+"""
+
+    chat = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.9,
+        max_tokens=60
+    )
+
+    return chat.choices[0].message.content.strip()
+
+# ===================== TEMPLATE =====================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#0f172a;font-family:Arial;">
+<table width="100%" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center">
+<table width="600" style="background:#111827;color:#ffffff;padding:20px;">
+
+<tr>
+<td align="center">
+<h1 style="margin:0;">NBA Daily</h1>
+<p style="color:#9ca3af;">{{ date }}</p>
+</td>
+</tr>
+
+{% for g in games %}
+<tr>
+<td style="padding:16px 0;border-bottom:1px solid #374151;">
+<h2 style="margin:0;">{{ g.game }} ({{ g.score }})</h2>
+<p style="margin:8px 0;">{{ g.recap }}</p>
+<p style="color:#fbbf24;">🔥 {{ g.player }} – {{ g.pts }} pts</p>
+<a href="{{ g.highlight_url }}" style="color:#60a5fa;">▶ Highlights</a>
+</td>
+</tr>
+{% endfor %}
+
+<tr>
+<td style="padding-top:20px;text-align:center;color:#6b7280;">
+<p>Generated with AI ⚡</p>
+</td>
+</tr>
+
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
+"""
+
+def render_html(games):
+    template = Template(HTML_TEMPLATE)
+    return template.render(games=games, date=get_yesterday())
+
+# ===================== SEND =====================
+def send_email(html, subject):
     sg = SendGridAPIClient(SENDGRID_KEY)
-    print("🔍 DEBUG SendGrid: Klient utworzony → wysyłam mail...")
 
-    message = Mail(from_email=FROM_EMAIL, subject=subject)
+    message = Mail(
+        from_email=FROM_EMAIL,
+        subject=subject,
+        html_content=html
+    )
 
-    if SENDGRID_TEMPLATE_ID:
-        message.template_id = SENDGRID_TEMPLATE_ID
-        message.dynamic_template_data = {"subject": subject, "html_content": html_content}
-    else:
-        message.html_content = html_content
-
-    for email in RECIPIENTS:
-        message.add_to(To(email))
+    for r in RECIPIENTS:
+        message.add_to(To(r))
 
     response = sg.send(message)
-    print(f"✅ Newsletter wysłany! Status SendGrid: {response.status_code}")
+    print("SendGrid status:", response.status_code)
 
-# ==================== MAIN ====================
+# ===================== MAIN =====================
 def main():
-    print("🚀 Start generowania NBA Newsletter LITE... (z debugiem SendGrid)")
-    
-    games_yest = fetch_yesterday_games()
-    games_today = fetch_today_games()
-    
-    print(f"✅ Znaleziono {len(games_yest)} meczów z wczoraj i {len(games_today)} na dziś.")
-    
-    newsletter_raw = generate_newsletter(games_yest, games_today)
-    
-    if "[TYTUŁ:" in newsletter_raw:
-        title = newsletter_raw.split("[TYTUŁ:")[1].split("]")[0].strip()
-        html = newsletter_raw.split("]", 1)[1].strip()
-    else:
-        title = f"NBA Daily • {get_yesterday()}"
-        html = newsletter_raw
+    print("🚀 NBA Newsletter PRO")
 
-    send_email(html, title)
-    print("🎉 Gotowe! Newsletter leci.")
+    games_raw = fetch_games(get_yesterday())
+    games = enrich_games(games_raw)
+
+    print(f"📊 Games: {len(games)}")
+
+    # AI recaps
+    for g in games:
+        g["recap"] = generate_recap(g)
+
+    subject = generate_subject(games)
+    html = render_html(games)
+
+    send_email(html, subject)
+
+    print("✅ DONE")
 
 if __name__ == "__main__":
     main()
