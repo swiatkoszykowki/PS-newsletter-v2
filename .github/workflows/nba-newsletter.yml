@@ -1,0 +1,34 @@
+name: NBA Newsletter Daily
+
+on:
+  schedule:
+    - cron: '0 7 * * *'      # codziennie o 7:00 rano czasu UTC (dla Polski ≈ 9:00)
+  workflow_dispatch:         # możesz uruchomić ręcznie z GitHub
+
+jobs:
+  send-newsletter:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run NBA Newsletter
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
+          RECIPIENTS: ${{ secrets.RECIPIENTS }}
+          SENDGRID_TEMPLATE_ID: ${{ secrets.SENDGRID_TEMPLATE_ID }}
+          BRAND_LOGO_URL: ${{ secrets.BRAND_LOGO_URL }}
+        run: python nba_newsletter.py
